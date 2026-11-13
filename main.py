@@ -1,10 +1,8 @@
 import customtkinter as ctk
-from tkinter import filedialog 
-from PIL import Image, ImageChops
-from pillow_heif import register_heif_opener
-from pathlib import Path
+from tkinter import filedialog, messagebox
+from convert import convert_heic_to_jpg
+
 selected_files = []
-register_heif_opener()
 
 
 app = ctk.CTk()
@@ -45,26 +43,43 @@ def choose_files():
             file_list.insert("end", file + "\n")
 
 
+
+    
 def convert_images():
+
+    
     if not selected_files:
-        print("Please select HEIC images first.")
+        messagebox.showwarning(
+            "No Images Selected",
+            "Please select HEIC images first."
+        )
         return
 
+    
     output_folder = filedialog.askdirectory(
         title="Choose output folder"
     )
 
     if not output_folder:
-        print("No output folder selected.")
         return
 
-    print("Selected output folder:", output_folder)
-
+    
     output_label.configure(
         text="Output folder: " + output_folder
     )
 
-    print("Images ready for conversion:", len(selected_files))
+    
+    converted, failed = convert_heic_to_jpg(
+        selected_files,
+        output_folder
+    )
+
+    
+    messagebox.showinfo(
+        "Conversion Complete",
+        f"Successfully converted: {converted}\n"
+        f"Failed: {failed}"
+    )
 
 choose_button = ctk.CTkButton(
     app,

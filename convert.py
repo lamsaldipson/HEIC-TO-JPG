@@ -4,36 +4,49 @@ from pillow_heif import register_heif_opener
 
 register_heif_opener()
 
-source = Path(r"D:\HEIC")
-output = Path(r"D:\JPG")
-output.mkdir(parents=True, exist_ok=True)
 
-files = [
-    p for p in source.rglob("*")
-    if p.suffix.lower() == ".heic"
-]
+def convert_heic_to_jpg(files, output_folder):
 
-for index, file in enumerate(files, 1):
-    try:
-        relative = file.relative_to(source)
-        destination = (output / relative).with_suffix(".jpg")
-        destination.parent.mkdir(parents=True, exist_ok=True)
+    output = Path(output_folder)
+    output.mkdir(parents=True, exist_ok=True)
 
-        with Image.open(file) as image:
-            image = ImageOps.exif_transpose(image)
-            image = image.convert("RGB")
+    converted = 0
+    failed = 0
 
-            image.save(
-                destination,
-                "JPEG",
-                quality=100,
-                subsampling=0,
-                exif=image.getexif().tobytes()
-            )
+    for index, file in enumerate(files, 1):
+        try:
+            source = Path(file)
 
-        print(f"[{index}/{len(files)}] Converted: {file.name}")
+            destination = output / (source.stem + ".jpg")
 
-    except Exception as e:
-        print(f"Error: {file.name}: {e}")
+            # Avoid overwriting existing images
+            number = 1
 
-print("Conversion finished!")
+            while destination.exists():
+                destination = output / f"{source.stem}_{number}.jpg"
+                number += 1
+
+            with Image.open(source) as image:
+                image = ImageOps.exif_transpose(image)
+
+                exif_data = image.getexif().tobytes()
+
+                image = image.convert("RGB")
+
+                image.save(
+                    destination,
+                    "JPEG",
+                    quality=100,
+                    subsampling=0,
+                    exif=exif_data
+                )
+
+            converted += 1
+            print(f"[{index}/{len(files)}] Converted: {source.name}")
+
+        except Exception as error:
+            failed += 1
+            print(f"Error: {file.name if isinstance(file, Path) else file}")
+            print(error)
+
+    return converted, failed
