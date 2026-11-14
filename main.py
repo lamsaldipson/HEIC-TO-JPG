@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from pathlib import Path
 from threading import Thread
 from queue import Queue, Empty
@@ -17,6 +17,8 @@ MUTED = "#64748B"
 BORDER = "#303044"
 
 selected_files = []
+output_names = {}
+editing_file = None
 events = Queue()
 converting = False
 
@@ -27,6 +29,15 @@ app.minsize(480, 480)
 app.resizable(True, True)
 app.configure(fg_color=WHITE)
 
+
+def rename_file(file):
+    if converting:
+        return
+
+    
+    global editing_file
+    editing_file = file
+    update_files()
 
 
 def update_files():
@@ -50,37 +61,102 @@ def update_files():
         ).pack(pady=35)
         return
 
+
     for file in selected_files:
         row = ctk.CTkFrame(
             file_container,
             fg_color="#F7F9FC",
-            corner_radius=8
+            corner_radius=9
         )
-        row.pack(fill="x", padx=5, pady=3)
+        row.pack(fill="x", padx=5, pady=4)
 
-        ctk.CTkLabel(
+        output_name = output_names.get(
+            file,
+            Path(file).stem
+        )
+
+        
+        info_frame = ctk.CTkFrame(
             row,
-            text=Path(file).name,
-            text_color=TEXT,
-            anchor="w"
-        ).pack(
+            fg_color="transparent"
+        )
+        info_frame.pack(
             side="left",
             fill="x",
             expand=True,
             padx=12,
-            pady=8
+            pady=5
         )
 
-        ctk.CTkButton(
+        if editing_file == file:
+            name_row = ctk.CTkFrame(info_frame, fg_color="transparent")
+            name_row.pack(fill="x")
+
+            name_entry = ctk.CTkEntry(
+                name_row,
+                font=("Arial", 13, "bold"),
+                height=32
+            )
+            name_entry.pack(side="left", fill="x", expand=True)
+            name_entry.insert(0, output_name)
+
+            ctk.CTkLabel(
+                name_row,
+                text=".jpg",
+                text_color=MUTED
+            ).pack(side="left", padx=5)
+
+            name_entry.bind(
+                "<Return>",
+                lambda event, f=file, e=name_entry: save_rename(f, e)
+            )
+            name_entry.after(50, name_entry.focus_set)
+            rename_command = lambda f=file, e=name_entry: save_rename(f, e)
+        else:
+            ctk.CTkLabel(
+                info_frame,
+                text=output_name + ".jpg",
+                font=("Arial", 13, "bold"),
+                text_color=TEXT,
+                anchor="w"
+            ).pack(fill="x")
+            rename_command = lambda f=file: rename_file(f)
+
+        ctk.CTkLabel(
+            info_frame,
+            text="Original: " + Path(file).name,
+            font=("Arial", 11),
+            text_color=MUTED,
+            anchor="w"
+        ).pack(fill="x")
+
+        remove_button = ctk.CTkButton(
             row,
-            text="Remove",
-            width=70,
-            height=28,
+            text="✕",
+            width=32,
+            height=32,
+            corner_radius=7,
             fg_color="#FEE2E2",
             hover_color="#FECACA",
-            text_color="#B91C1C",
+            text_color="#DC2626",
+            font=("Arial", 16, "bold"),
             command=lambda f=file: remove_file(f)
-        ).pack(side="right", padx=8)
+        )
+        remove_button.pack(side="right", padx=(4, 8))
+
+        rename_button = ctk.CTkButton(
+            row,
+            text="✓" if editing_file == file else "✎",
+            width=32,
+            height=32,
+            corner_radius=7,
+            fg_color="#E8EFFD",
+            hover_color="#D7E5FF",
+            text_color=BLUE,
+            font=("Arial", 17),
+            command=rename_command
+        )
+        rename_button.pack(side="right", padx=4)
 
 
 def choose_files():
@@ -107,15 +183,51 @@ def remove_file(file):
 
     if file in selected_files:
         selected_files.remove(file)
-
+        
+    output_names.pop(file, None)
     update_files()
 
+def save_rename(file, entry):
+    global editing_file
+
+    new_name = entry.get().strip()
+
+    if new_name.lower().endswith(".jpg"):
+        new_name = new_name[:-4]
+
+    invalid_characters = '<>:"/\\|?*'
+
+    reserved_names = {
+        "CON", "PRN", "AUX", "NUL",
+        *[f"COM{i}" for i in range(1, 10)],
+        *[f"LPT{i}" for i in range(1, 10)]
+    }
+
+    if (
+        not new_name
+        or any(char in new_name for char in invalid_characters)
+        or any(ord(char) < 32 for char in new_name)
+        or new_name.endswith((".", " "))
+        or new_name.upper().split(".")[0] in reserved_names
+    ):
+        messagebox.showwarning(
+            "Invalid Filename",
+            "Please enter a valid Windows filename."
+        )
+        return
+
+    output_names[file] = new_name
+    editing_file = None
+    update_files()
 
 def clear_files():
     if converting:
         return
 
     selected_files.clear()
+    output_names.clear()
+    global editing_file
+    editing_file = None
     update_files()
 
 
@@ -146,7 +258,7 @@ def start_conversion():
 
     progress_card.pack(
         fill="both",
-        expand="True",
+        expand=True,
         pady=(0, 15)
     )
 
@@ -236,12 +348,18 @@ def check_events():
 
 
 def reset_screen():
-    global converting
+    global converting, editing_file
 
     converting = False
+    editing_file = None
+
+    # Clear previous conversion files
+    selected_files.clear()
+    output_names.clear()
 
     progress_card.pack_forget()
 
+    # Restore the selected-images panel
     files_card.pack(
         fill="x",
         pady=(0, 25)
@@ -457,14 +575,8 @@ def on_resize(event):
 
     if width < 650:
         title_font = ("Arial", 26, "bold")
-        padding = 10
     else:
         title_font = ("Arial", 38, "bold")
-        padding = 20
-
-    main.configure(
-        
-    )
 
     
     for widget in main.winfo_children():
