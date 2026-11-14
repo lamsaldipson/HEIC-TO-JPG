@@ -1,4 +1,3 @@
-
 import customtkinter as ctk
 from tkinter import filedialog
 from pathlib import Path
@@ -7,10 +6,6 @@ from queue import Queue, Empty
 
 from convert import convert_heic_to_jpg
 
-
-# --------------------
-# APP SETTINGS
-# --------------------
 
 ctk.set_appearance_mode("light")
 
@@ -28,13 +23,11 @@ converting = False
 app = ctk.CTk()
 app.title("HEIC to JPEG Converter")
 app.geometry("900x700")
-app.minsize(760, 620)
+app.minsize(480, 480)
+app.resizable(True, True)
 app.configure(fg_color=WHITE)
 
 
-# --------------------
-# FILE FUNCTIONS
-# --------------------
 
 def update_files():
     for widget in file_container.winfo_children():
@@ -126,9 +119,6 @@ def clear_files():
     update_files()
 
 
-# --------------------
-# CONVERSION FUNCTIONS
-# --------------------
 
 def start_conversion():
     global converting
@@ -136,7 +126,7 @@ def start_conversion():
     if converting or not selected_files:
         return
 
-    # Ask for output folder ONLY after clicking Convert
+
     folder = filedialog.askdirectory(
         title="Choose where to save JPEG images"
     )
@@ -152,12 +142,12 @@ def start_conversion():
 
     update_files()
 
-    # Replace file list with progress screen
     files_card.pack_forget()
 
     progress_card.pack(
-        fill="x",
-        pady=(0, 25)
+        fill="both",
+        expand="True",
+        pady=(0, 15)
     )
 
     progress_bar.set(0)
@@ -229,7 +219,7 @@ def check_events():
                         text_color="#B45309"
                     )
 
-                # Return to normal screen after 2 seconds
+                
                 app.after(2000, reset_screen)
 
             elif event[0] == "error":
@@ -263,9 +253,7 @@ def reset_screen():
     update_files()
 
 
-# --------------------
-# USER INTERFACE
-# --------------------
+
 
 main = ctk.CTkFrame(
     app,
@@ -274,12 +262,21 @@ main = ctk.CTkFrame(
 main.pack(
     fill="both",
     expand=True,
-    padx=50,
-    pady=20
+    padx=20,
+    pady=12
 )
 
+bottom_frame = ctk.CTkFrame(
+    app,
+    fg_color="transparent"
+)
 
-# HEADER
+bottom_frame.pack(
+    side="bottom",
+    fill="x",
+    padx=20,
+    pady=(0, 15)
+)
 
 ctk.CTkLabel(
     main,
@@ -295,8 +292,6 @@ ctk.CTkLabel(
     text_color=TEXT
 ).pack(pady=(0, 25))
 
-
-# UPLOAD AREA
 
 upload_card = ctk.CTkFrame(
     main,
@@ -340,7 +335,6 @@ browse_button = ctk.CTkButton(
 browse_button.pack(pady=(10, 15))
 
 
-# SELECTED IMAGES
 
 files_card = ctk.CTkFrame(
     main,
@@ -390,13 +384,13 @@ file_container = ctk.CTkScrollableFrame(
     height=140
 )
 file_container.pack(
-    fill="x",
+    fill="both",
+    expand=True,
     padx=12,
     pady=(5, 12)
 )
 
 
-# PROGRESS SCREEN (HIDDEN INITIALLY)
 
 progress_card = ctk.CTkFrame(
     main,
@@ -434,24 +428,50 @@ counter_label = ctk.CTkLabel(
 counter_label.pack(pady=(0, 25))
 
 
-# CONVERT BUTTON
 
 convert_button = ctk.CTkButton(
-    main,
+    bottom_frame,
     text="Convert to JPEG",
     height=65,
-    width=550,
     font=("Arial", 22, "bold"),
     fg_color=BLUE,
     hover_color=BLUE_HOVER,
     corner_radius=12,
     command=start_conversion
 )
-convert_button.pack(pady=(0, 10))
+convert_button.pack(
+    fill="x",
+    padx=10,
+    pady=(0, 10)
+)
 
 update_files()
 
-# Poll worker events on the main Tkinter thread
 app.after(100, check_events)
+
+def on_resize(event):
+    if event.widget != app:
+        return
+
+    width = app.winfo_width()
+
+    if width < 650:
+        title_font = ("Arial", 26, "bold")
+        padding = 10
+    else:
+        title_font = ("Arial", 38, "bold")
+        padding = 20
+
+    main.configure(
+        
+    )
+
+    
+    for widget in main.winfo_children():
+        if isinstance(widget, ctk.CTkLabel):
+            if widget.cget("text") == "HEIC To JPEG":
+                widget.configure(font=title_font)
+                
+app.bind("<Configure>", on_resize)
 
 app.mainloop()
