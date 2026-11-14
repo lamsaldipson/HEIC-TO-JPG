@@ -1,31 +1,99 @@
+
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
+from pathlib import Path
+from threading import Thread
+from queue import Queue, Empty
+
 from convert import convert_heic_to_jpg
 
-selected_files = []
 
+# --------------------
+# APP SETTINGS
+# --------------------
+
+ctk.set_appearance_mode("light")
+
+BLUE = "#2563EB"
+BLUE_HOVER = "#1D4ED8"
+WHITE = "#FFFFFF"
+TEXT = "#111827"
+MUTED = "#64748B"
+BORDER = "#303044"
+
+selected_files = []
+events = Queue()
+converting = False
 
 app = ctk.CTk()
-
 app.title("HEIC to JPEG Converter")
-app.geometry("700x650")
+app.geometry("900x700")
+app.minsize(760, 620)
+app.configure(fg_color=WHITE)
 
-heading = ctk.CTkLabel(
-    app,
-    text="HEIC TO JPEG",
-    font=("Arial", 35, "bold")
-    
-)
-heading.pack(pady=(60,10))
 
-subtitle = ctk.CTkLabel(
-    app,
-    text="Convert your HEIC photos to high-quality JPEG images with ease.",
-    font=("Arial", 15)
-)
-subtitle.pack(pady=10)
+# --------------------
+# FILE FUNCTIONS
+# --------------------
+
+def update_files():
+    for widget in file_container.winfo_children():
+        widget.destroy()
+
+    count_label.configure(
+        text=f"{len(selected_files)} files selected"
+    )
+
+    convert_button.configure(
+        state="normal" if selected_files and not converting
+        else "disabled"
+    )
+
+    if not selected_files:
+        ctk.CTkLabel(
+            file_container,
+            text="No images selected yet",
+            text_color=MUTED
+        ).pack(pady=35)
+        return
+
+    for file in selected_files:
+        row = ctk.CTkFrame(
+            file_container,
+            fg_color="#F7F9FC",
+            corner_radius=8
+        )
+        row.pack(fill="x", padx=5, pady=3)
+
+        ctk.CTkLabel(
+            row,
+            text=Path(file).name,
+            text_color=TEXT,
+            anchor="w"
+        ).pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=12,
+            pady=8
+        )
+
+        ctk.CTkButton(
+            row,
+            text="Remove",
+            width=70,
+            height=28,
+            fg_color="#FEE2E2",
+            hover_color="#FECACA",
+            text_color="#B91C1C",
+            command=lambda f=file: remove_file(f)
+        ).pack(side="right", padx=8)
+
 
 def choose_files():
+    if converting:
+        return
+
     files = filedialog.askopenfilenames(
         title="Select HEIC Images",
         filetypes=[
@@ -33,88 +101,357 @@ def choose_files():
         ]
     )
 
-    if files:
-        selected_files.clear()
-        selected_files.extend(files)
+    for file in files:
+        if file not in selected_files:
+            selected_files.append(file)
 
-        file_list.delete("1.0", "end")
-
-        for file in selected_files:
-            file_list.insert("end", file + "\n")
+    update_files()
 
 
+def remove_file(file):
+    if converting:
+        return
 
-    
-def convert_images():
+    if file in selected_files:
+        selected_files.remove(file)
 
-    
-    if not selected_files:
-        messagebox.showwarning(
-            "No Images Selected",
-            "Please select HEIC images first."
+    update_files()
+
+
+def clear_files():
+    if converting:
+        return
+
+    selected_files.clear()
+    update_files()
+
+
+# --------------------
+# CONVERSION FUNCTIONS
+# --------------------
+
+def start_conversion():
+    global converting
+
+    if converting or not selected_files:
+        return
+
+    # Ask for output folder ONLY after clicking Convert
+    folder = filedialog.askdirectory(
+        title="Choose where to save JPEG images"
+    )
+
+    if not folder:
+        return
+
+    converting = True
+
+    browse_button.configure(state="disabled")
+    clear_button.configure(state="disabled")
+    convert_button.configure(state="disabled")
+
+    update_files()
+
+    # Replace file list with progress screen
+    files_card.pack_forget()
+
+    progress_card.pack(
+        fill="x",
+        pady=(0, 25)
+    )
+
+    progress_bar.set(0)
+    progress_label.configure(text="Converting... 0%")
+    counter_label.configure(
+        text=f"0 / {len(selected_files)} images"
+    )
+
+    files_to_convert = selected_files.copy()
+
+    Thread(
+        target=conversion_worker,
+        args=(files_to_convert, folder),
+        daemon=True
+    ).start()
+
+
+def conversion_worker(files, folder):
+    try:
+        def report_progress(current, total):
+            events.put(("progress", current, total))
+
+        converted, failed = convert_heic_to_jpg(
+            files,
+            folder,
+            progress_callback=report_progress
         )
-        return
 
-    
-    output_folder = filedialog.askdirectory(
-        title="Choose output folder"
+        events.put(("done", converted, failed))
+
+    except Exception as error:
+        events.put(("error", str(error)))
+
+
+def check_events():
+    try:
+        while True:
+            event = events.get_nowait()
+
+            if event[0] == "progress":
+                _, current, total = event
+
+                percentage = current / total if total else 0
+
+                progress_bar.set(percentage)
+
+                progress_label.configure(
+                    text=f"Converting... {percentage:.0%}"
+                )
+
+                counter_label.configure(
+                    text=f"{current} / {total} images"
+                )
+
+            elif event[0] == "done":
+                _, converted, failed = event
+
+                progress_bar.set(1)
+
+                if failed == 0:
+                    progress_label.configure(
+                        text="Done 👍",
+                        text_color="#15803D"
+                    )
+                else:
+                    progress_label.configure(
+                        text=f"Done 👍  {converted} converted, "
+                             f"{failed} failed",
+                        text_color="#B45309"
+                    )
+
+                # Return to normal screen after 2 seconds
+                app.after(2000, reset_screen)
+
+            elif event[0] == "error":
+                progress_label.configure(
+                    text="Conversion failed: " + event[1],
+                    text_color="#DC2626"
+                )
+                app.after(2000, reset_screen)
+
+    except Empty:
+        pass
+
+    app.after(100, check_events)
+
+
+def reset_screen():
+    global converting
+
+    converting = False
+
+    progress_card.pack_forget()
+
+    files_card.pack(
+        fill="x",
+        pady=(0, 25)
     )
 
-    if not output_folder:
-        return
+    browse_button.configure(state="normal")
+    clear_button.configure(state="normal")
 
-    
-    output_label.configure(
-        text="Output folder: " + output_folder
-    )
+    update_files()
 
-    
-    converted, failed = convert_heic_to_jpg(
-        selected_files,
-        output_folder
-    )
 
-    
-    messagebox.showinfo(
-        "Conversion Complete",
-        f"Successfully converted: {converted}\n"
-        f"Failed: {failed}"
-    )
+# --------------------
+# USER INTERFACE
+# --------------------
 
-choose_button = ctk.CTkButton(
+main = ctk.CTkFrame(
     app,
-    text="Choose Files",
+    fg_color="transparent"
+)
+main.pack(
+    fill="both",
+    expand=True,
+    padx=50,
+    pady=20
+)
+
+
+# HEADER
+
+ctk.CTkLabel(
+    main,
+    text="HEIC To JPEG",
+    font=("Arial", 38, "bold"),
+    text_color="#000000"
+).pack(pady=(0, 10))
+
+ctk.CTkLabel(
+    main,
+    text="Convert your images quickly, privately, and in high quality",
+    font=("Arial", 16, "bold"),
+    text_color=TEXT
+).pack(pady=(0, 25))
+
+
+# UPLOAD AREA
+
+upload_card = ctk.CTkFrame(
+    main,
+    fg_color=WHITE,
+    border_width=1,
+    border_color=BORDER,
+    corner_radius=16
+)
+upload_card.pack(fill="x", pady=(0, 25))
+
+ctk.CTkLabel(
+    upload_card,
+    text="↑",
+    font=("Arial", 32),
+    text_color=BLUE
+).pack(pady=(10, 0))
+
+ctk.CTkLabel(
+    upload_card,
+    text="Add your HEIC images",
+    font=("Arial", 19, "bold"),
+    text_color=TEXT
+).pack()
+
+ctk.CTkLabel(
+    upload_card,
+    text="Select one or multiple HEIC / HEIF images",
+    font=("Arial", 12),
+    text_color=MUTED
+).pack(pady=5)
+
+browse_button = ctk.CTkButton(
+    upload_card,
+    text="+ Browse Files",
     width=180,
-    height=45,
+    height=42,
+    fg_color=BLUE,
+    hover_color=BLUE_HOVER,
     command=choose_files
 )
+browse_button.pack(pady=(10, 15))
 
-choose_button.pack(pady=30)
-    
-file_list = ctk.CTkTextbox(
-    app,
-    width=500,
-    height=150
+
+# SELECTED IMAGES
+
+files_card = ctk.CTkFrame(
+    main,
+    fg_color=WHITE,
+    border_width=1,
+    border_color=BORDER,
+    corner_radius=16
+)
+files_card.pack(fill="x", pady=(0, 25))
+
+files_header = ctk.CTkFrame(
+    files_card,
+    fg_color="transparent"
+)
+files_header.pack(fill="x", padx=20, pady=(12, 5))
+
+ctk.CTkLabel(
+    files_header,
+    text="Selected Images",
+    font=("Arial", 15, "bold"),
+    text_color=TEXT
+).pack(side="left")
+
+clear_button = ctk.CTkButton(
+    files_header,
+    text="Clear All",
+    width=80,
+    height=28,
+    fg_color="#F1F5F9",
+    text_color=TEXT,
+    hover_color="#E2E8F0",
+    command=clear_files
+)
+clear_button.pack(side="right")
+
+count_label = ctk.CTkLabel(
+    files_card,
+    text="0 files selected",
+    text_color=MUTED,
+    font=("Arial", 11)
+)
+count_label.pack(anchor="w", padx=20)
+
+file_container = ctk.CTkScrollableFrame(
+    files_card,
+    fg_color="transparent",
+    height=140
+)
+file_container.pack(
+    fill="x",
+    padx=12,
+    pady=(5, 12)
 )
 
-file_list.pack(pady=10)
+
+# PROGRESS SCREEN (HIDDEN INITIALLY)
+
+progress_card = ctk.CTkFrame(
+    main,
+    fg_color=WHITE,
+    border_width=1,
+    border_color=BORDER,
+    corner_radius=16
+)
+
+progress_label = ctk.CTkLabel(
+    progress_card,
+    text="Converting... 0%",
+    font=("Arial", 20, "bold"),
+    text_color=TEXT
+)
+progress_label.pack(pady=(25, 10))
+
+progress_bar = ctk.CTkProgressBar(
+    progress_card,
+    height=12,
+    progress_color=BLUE
+)
+progress_bar.pack(
+    fill="x",
+    padx=30,
+    pady=10
+)
+progress_bar.set(0)
+
+counter_label = ctk.CTkLabel(
+    progress_card,
+    text="0 / 0 images",
+    text_color=MUTED
+)
+counter_label.pack(pady=(0, 25))
+
+
+# CONVERT BUTTON
 
 convert_button = ctk.CTkButton(
-    app,
+    main,
     text="Convert to JPEG",
-    width=200,
-    height=45,
-    command=convert_images
+    height=65,
+    width=550,
+    font=("Arial", 22, "bold"),
+    fg_color=BLUE,
+    hover_color=BLUE_HOVER,
+    corner_radius=12,
+    command=start_conversion
 )
+convert_button.pack(pady=(0, 10))
 
-convert_button.pack(pady=20)
+update_files()
 
-output_label = ctk.CTkLabel(
-    app,
-    text="Output Folder: Not selected",
-    font=("Arial", 12)
-)
-output_label.pack(pady=10)
+# Poll worker events on the main Tkinter thread
+app.after(100, check_events)
 
-    
 app.mainloop()
