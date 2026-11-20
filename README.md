@@ -77,3 +77,5 @@ py -m pip install customtkinter Pillow pillow-heif
 py -m py_compile main.py convert.py
 ```
 
+<img width="1004" height="764" alt="image" src="https://github.com/user-attachments/assets/f8dbc3c0-b086-46e0-b93d-c5c28925856a" />
+
