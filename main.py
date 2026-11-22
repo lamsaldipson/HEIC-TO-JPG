@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 from threading import Thread
 from queue import Queue, Empty
+from collections import defaultdict
 
 from convert import convert_heic_to_jpg
 
@@ -178,6 +179,7 @@ def choose_files():
 
 
 def remove_file(file):
+    global editing_file
     if converting:
         return
 
@@ -185,6 +187,8 @@ def remove_file(file):
         selected_files.remove(file)
         
     output_names.pop(file, None)
+    if editing_file == file:
+        editing_file = None
     update_files()
 
 def save_rename(file, entry):
@@ -232,66 +236,198 @@ def clear_files():
 
 
 
-def start_conversion():
-    global converting
+def valid_filename(name):
+    invalid = '<>:"/\\|?*'
+    reserved = {'CON', 'PRN', 'AUX', 'NUL'} | {f'COM{i}' for i in range(1, 10)} | {f'LPT{i}' for i in range(1, 10)}
+    return bool(name) and not any(c in invalid or ord(c) < 32 for c in name) and not name.endswith(('.', ' ')) and name.upper().split('.')[0] not in reserved
 
+
+def filename_key(name):
+    return name.casefold()
+
+
+def available_name(base, used):
+    counter = 1
+    candidate = f'{base}_{counter}.jpg'
+    while filename_key(candidate) in used:
+        counter += 1
+        candidate = f'{base}_{counter}.jpg'
+    return candidate
+
+
+def begin_conversion(folder, jobs):
+    global converting
+    converting = True
+    browse_button.configure(state='disabled')
+    clear_button.configure(state='disabled')
+    update_files()
+    files_card.pack_forget()
+    progress_card.pack(fill='x', pady=(0, 15))
+    progress_bar.set(0)
+    progress_label.configure(text='Converting... 0%', text_color=TEXT)
+    counter_label.configure(text=f'0 / {len(jobs)} images')
+    Thread(target=conversion_worker, args=(jobs, folder), daemon=True).start()
+
+
+def start_conversion():
     if converting or not selected_files:
         return
+    if editing_file is not None:
+        messagebox.showinfo('Finish renaming', 'Click ✓ or press Enter to save the filename before converting.')
+        return
 
-
-    folder = filedialog.askdirectory(
-        title="Choose where to save JPEG images"
-    )
-
+    folder = filedialog.askdirectory(title='Choose where to save JPEG images')
     if not folder:
         return
 
-    converting = True
+    destination = Path(folder)
+    # A single directory scan is faster than searching for each selected name.
+    existing = {}
+    try:
+        for entry in destination.iterdir():
+            existing[filename_key(entry.name)] = entry
+    except OSError as exc:
+        messagebox.showerror('Folder error', str(exc))
+        return
 
-    browse_button.configure(state="disabled")
-    clear_button.configure(state="disabled")
-    convert_button.configure(state="disabled")
+    planned = []
+    for source in selected_files:
+        base = output_names.get(source, Path(source).stem)
+        if not valid_filename(base):
+            messagebox.showerror('Invalid filename', f'Please rename: {base}')
+            return
+        planned.append({'source': source, 'base': base, 'name': base + '.jpg', 'action': 'new'})
 
-    update_files()
-
-    files_card.pack_forget()
-
-    progress_card.pack(
-        fill="both",
-        expand=True,
-        pady=(0, 15)
-    )
-
-    progress_bar.set(0)
-    progress_label.configure(text="Converting... 0%")
-    counter_label.configure(
-        text=f"0 / {len(selected_files)} images"
-    )
-
-    files_to_convert = selected_files.copy()
-
-    Thread(
-        target=conversion_worker,
-        args=(files_to_convert, folder),
-        daemon=True
-    ).start()
+    # Any output name shared by two selected images is a conflict too.
+    counts = defaultdict(int)
+    for item in planned:
+        counts[filename_key(item['name'])] += 1
+    conflicts = [i for i, item in enumerate(planned)
+                 if filename_key(item['name']) in existing or counts[filename_key(item['name'])] > 1]
+    if conflicts:
+        show_conflicts(folder, planned, existing, conflicts)
+    else:
+        begin_conversion(folder, [(x['source'], x['name'], 'new') for x in planned])
 
 
-def conversion_worker(files, folder):
+def show_conflicts(folder, planned, existing, conflicts):
+    dialog = ctk.CTkToplevel(app)
+    dialog.title('Resolve filename conflicts')
+    dialog.geometry('740x560')
+    dialog.minsize(480, 370)
+    dialog.transient(app)
+    dialog.grab_set()
+    dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+
+    ctk.CTkLabel(dialog, text=f'{len(conflicts)} filename conflict(s) found',
+                 font=('Arial', 21, 'bold')).pack(pady=(18, 4))
+    ctk.CTkLabel(dialog, text='Rename, Replace or Skip. Existing files are never deleted automatically.',
+                 text_color=MUTED, wraplength=450).pack(pady=(0, 10))
+
+    choices = {}
+    rows = ctk.CTkScrollableFrame(dialog, fg_color='transparent')
+    rows.pack(fill='both', expand=True, padx=18, pady=8)
+
+    for index in conflicts:
+        item = planned[index]
+        line = ctk.CTkFrame(rows, fg_color='#F1F5F9', corner_radius=10)
+        line.pack(fill='x', pady=5)
+        ctk.CTkLabel(line, text=Path(item['source']).name,
+                     anchor='w', font=('Arial', 12, 'bold')).pack(fill='x', padx=12, pady=(8, 0))
+        ctk.CTkLabel(line, text='Output: ' + item['name'], text_color=MUTED,
+                     anchor='w').pack(fill='x', padx=12)
+        control = ctk.CTkFrame(line, fg_color='transparent')
+        control.pack(fill='x', padx=10, pady=8)
+        mode = ctk.StringVar(value='rename')
+        selector = ctk.CTkOptionMenu(control, values=['rename', 'replace', 'skip'], variable=mode, width=115)
+        selector.pack(side='left', padx=(0, 8))
+        entry = ctk.CTkEntry(control, placeholder_text='New JPEG filename (without .jpg)')
+        entry.pack(side='left', fill='x', expand=True)
+        choices[index] = (mode, entry)
+
+    def apply_to_all(action):
+        for mode, _ in choices.values():
+            mode.set(action)
+
+    all_buttons = ctk.CTkFrame(dialog, fg_color='transparent')
+    all_buttons.pack(fill='x', padx=18)
+    ctk.CTkLabel(all_buttons, text='Apply to all:', text_color=MUTED).pack(side='left', padx=(0, 8))
+    for label, action in [('Auto-rename', 'rename'), ('Replace', 'replace'), ('Skip', 'skip')]:
+        ctk.CTkButton(all_buttons, text=label, width=95, height=30,
+                      fg_color='#E2E8F0', hover_color='#CBD5E1', text_color=TEXT,
+                      command=lambda a=action: apply_to_all(a)).pack(side='left', padx=3)
+
+    def confirm():
+        # First reserve every unchanged output name. This avoids accidental
+        # collisions between auto-renamed and nonconflicting images.
+        used = {filename_key(x['name']) for i, x in enumerate(planned) if i not in conflicts}
+        used.update(existing.keys())
+        jobs = []
+        for i, item in enumerate(planned):
+            if i not in conflicts:
+                jobs.append((item['source'], item['name'], 'new'))
+                continue
+            mode, entry = choices[i]
+            action = mode.get()
+            if action == 'skip':
+                jobs.append((item['source'], item['name'], 'skip'))
+                continue
+            if action == 'replace':
+                key = filename_key(item['name'])
+                target = existing.get(key)
+                if target is None or not target.is_file():
+                    messagebox.showwarning('Cannot replace',
+                        f'{item["name"]} is not an existing regular file. Choose Rename or Skip.', parent=dialog)
+                    return
+                # Multiple replacements of the same file in one batch are unsafe.
+                if sum(1 for j in jobs if j[2] == 'replace' and filename_key(j[1]) == key):
+                    messagebox.showwarning('Duplicate replacement',
+                        f'Multiple images would replace {item["name"]}. Rename one instead.', parent=dialog)
+                    return
+                jobs.append((item['source'], target.name, 'replace'))
+                continue
+            base = entry.get().strip()
+            if base.lower().endswith('.jpg'):
+                base = base[:-4]
+            if not base:
+                base = item['base']
+                name = available_name(base, used)
+            else:
+                if not valid_filename(base):
+                    messagebox.showwarning('Invalid name', f'Invalid filename: {base}', parent=dialog)
+                    return
+                name = base + '.jpg'
+                if filename_key(name) in used:
+                    messagebox.showwarning('Name already used',
+                        f'{name} already exists or is planned. Choose a different name.', parent=dialog)
+                    return
+            used.add(filename_key(name))
+            jobs.append((item['source'], name, 'new'))
+
+        if any(action == 'replace' for _, _, action in jobs):
+            if not messagebox.askyesno('Confirm replacement',
+                'Replace the selected existing JPEG files? This cannot be undone.', parent=dialog):
+                return
+        dialog.grab_release()
+        dialog.destroy()
+        begin_conversion(folder, jobs)
+
+    footer = ctk.CTkFrame(dialog, fg_color='transparent')
+    footer.pack(fill='x', padx=18, pady=14)
+    ctk.CTkButton(footer, text='Cancel', fg_color='#E2E8F0', text_color=TEXT,
+                  hover_color='#CBD5E1', command=dialog.destroy).pack(side='left')
+    ctk.CTkButton(footer, text='Continue Conversion', fg_color=BLUE,
+                  command=confirm).pack(side='right')
+
+
+def conversion_worker(jobs, folder):
     try:
         def report_progress(current, total):
-            events.put(("progress", current, total))
-
-        converted, failed = convert_heic_to_jpg(
-            files,
-            folder,
-            progress_callback=report_progress
-        )
-
-        events.put(("done", converted, failed))
-
+            events.put(('progress', current, total))
+        converted, failed, skipped = convert_heic_to_jpg(jobs, folder, progress_callback=report_progress)
+        events.put(('done', converted, failed, skipped))
     except Exception as error:
-        events.put(("error", str(error)))
+        events.put(('error', str(error)))
 
 
 def check_events():
@@ -315,36 +451,49 @@ def check_events():
                 )
 
             elif event[0] == "done":
-                _, converted, failed = event
+                _, converted, failed, skipped = event
 
                 progress_bar.set(1)
 
                 if failed == 0:
                     progress_label.configure(
-                        text="Done 👍",
+                        text=f"Done 👍  {converted} converted, {skipped} skipped",
                         text_color="#15803D"
                     )
                 else:
                     progress_label.configure(
-                        text=f"Done 👍  {converted} converted, "
+                        text=f"Finished: {converted} converted, {skipped} skipped, "
                              f"{failed} failed",
                         text_color="#B45309"
                     )
 
                 
-                app.after(2000, reset_screen)
+                if failed == 0:
+                    app.after(2000, reset_screen)
+                else:
+                    app.after(2000, reset_after_failure)
 
             elif event[0] == "error":
                 progress_label.configure(
                     text="Conversion failed: " + event[1],
                     text_color="#DC2626"
                 )
-                app.after(2000, reset_screen)
+                app.after(2000, reset_after_failure)
 
     except Empty:
         pass
 
     app.after(100, check_events)
+
+
+def reset_after_failure():
+    global converting
+    converting = False
+    progress_card.pack_forget()
+    files_card.pack(fill="x", pady=(0, 25))
+    browse_button.configure(state="normal")
+    clear_button.configure(state="normal")
+    update_files()
 
 
 def reset_screen():
@@ -373,30 +522,15 @@ def reset_screen():
 
 
 
-main = ctk.CTkFrame(
-    app,
-    fg_color="transparent"
-)
-main.pack(
-    fill="both",
-    expand=True,
-    padx=20,
-    pady=12
-)
+# Reserve the convert button area first so it is never squeezed by the main content.
+bottom_frame = ctk.CTkFrame(app, fg_color="transparent")
+bottom_frame.pack(side="bottom", fill="x", padx=15, pady=(4, 8))
 
-bottom_frame = ctk.CTkFrame(
-    app,
-    fg_color="transparent"
-)
+# The rest scrolls when the window becomes short or narrow.
+main = ctk.CTkScrollableFrame(app, fg_color="transparent", corner_radius=0)
+main.pack(side="top", fill="both", expand=True, padx=15, pady=(6, 2))
 
-bottom_frame.pack(
-    side="bottom",
-    fill="x",
-    padx=20,
-    pady=(0, 15)
-)
-
-ctk.CTkLabel(
+title_label = ctk.CTkLabel(
     main,
     text="HEIC To JPEG",
     font=("Arial", 38, "bold"),
@@ -557,11 +691,7 @@ convert_button = ctk.CTkButton(
     corner_radius=12,
     command=start_conversion
 )
-convert_button.pack(
-    fill="x",
-    padx=10,
-    pady=(0, 10)
-)
+convert_button.pack(fill="x", padx=5, pady=3)
 
 update_files()
 
@@ -570,20 +700,9 @@ app.after(100, check_events)
 def on_resize(event):
     if event.widget != app:
         return
-
     width = app.winfo_width()
+    title_label.configure(font=("Arial", 26 if width < 650 else 38, "bold"))
 
-    if width < 650:
-        title_font = ("Arial", 26, "bold")
-    else:
-        title_font = ("Arial", 38, "bold")
-
-    
-    for widget in main.winfo_children():
-        if isinstance(widget, ctk.CTkLabel):
-            if widget.cget("text") == "HEIC To JPEG":
-                widget.configure(font=title_font)
-                
 app.bind("<Configure>", on_resize)
 
 app.mainloop()
