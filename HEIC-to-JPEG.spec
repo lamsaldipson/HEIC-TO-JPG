@@ -6,7 +6,7 @@ datas += collect_data_files('customtkinter')
 
 
 a = Analysis(
-    ['main.py'],
+    ['Heic to Jpg/main.py'],
     pathex=[],
     binaries=[],
     datas=datas,
