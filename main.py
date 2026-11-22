@@ -535,7 +535,9 @@ title_label = ctk.CTkLabel(
     text="HEIC To JPEG",
     font=("Arial", 38, "bold"),
     text_color="#000000"
-).pack(pady=(0, 10))
+)
+
+title_label.pack(pady=(0, 10))
 
 ctk.CTkLabel(
     main,
