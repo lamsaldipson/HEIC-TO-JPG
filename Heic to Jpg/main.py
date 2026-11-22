@@ -1,0 +1,708 @@
+import customtkinter as ctk
+from tkinter import filedialog, messagebox
+from pathlib import Path
+from threading import Thread
+from queue import Queue, Empty
+from collections import defaultdict
+
+from convert import convert_heic_to_jpg
+
+
+ctk.set_appearance_mode("light")
+
+BLUE = "#2563EB"
+BLUE_HOVER = "#1D4ED8"
+WHITE = "#FFFFFF"
+TEXT = "#111827"
+MUTED = "#64748B"
+BORDER = "#303044"
+
+selected_files = []
+output_names = {}
+editing_file = None
+events = Queue()
+converting = False
+
+app = ctk.CTk()
+app.title("HEIC to JPEG Converter")
+app.geometry("900x700")
+app.minsize(480, 480)
+app.resizable(True, True)
+app.configure(fg_color=WHITE)
+
+
+def rename_file(file):
+    if converting:
+        return
+
+    
+    global editing_file
+    editing_file = file
+    update_files()
+
+
+def update_files():
+    for widget in file_container.winfo_children():
+        widget.destroy()
+
+    count_label.configure(
+        text=f"{len(selected_files)} files selected"
+    )
+
+    convert_button.configure(
+        state="normal" if selected_files and not converting
+        else "disabled"
+    )
+
+    if not selected_files:
+        ctk.CTkLabel(
+            file_container,
+            text="No images selected yet",
+            text_color=MUTED
+        ).pack(pady=35)
+        return
+
+
+    for file in selected_files:
+        row = ctk.CTkFrame(
+            file_container,
+            fg_color="#F7F9FC",
+            corner_radius=9
+        )
+        row.pack(fill="x", padx=5, pady=4)
+
+        output_name = output_names.get(
+            file,
+            Path(file).stem
+        )
+
+        
+        info_frame = ctk.CTkFrame(
+            row,
+            fg_color="transparent"
+        )
+        info_frame.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=12,
+            pady=5
+        )
+
+        if editing_file == file:
+            name_row = ctk.CTkFrame(info_frame, fg_color="transparent")
+            name_row.pack(fill="x")
+
+            name_entry = ctk.CTkEntry(
+                name_row,
+                font=("Arial", 13, "bold"),
+                height=32
+            )
+            name_entry.pack(side="left", fill="x", expand=True)
+            name_entry.insert(0, output_name)
+
+            ctk.CTkLabel(
+                name_row,
+                text=".jpg",
+                text_color=MUTED
+            ).pack(side="left", padx=5)
+
+            name_entry.bind(
+                "<Return>",
+                lambda event, f=file, e=name_entry: save_rename(f, e)
+            )
+            name_entry.after(50, name_entry.focus_set)
+            rename_command = lambda f=file, e=name_entry: save_rename(f, e)
+        else:
+            ctk.CTkLabel(
+                info_frame,
+                text=output_name + ".jpg",
+                font=("Arial", 13, "bold"),
+                text_color=TEXT,
+                anchor="w"
+            ).pack(fill="x")
+            rename_command = lambda f=file: rename_file(f)
+
+        ctk.CTkLabel(
+            info_frame,
+            text="Original: " + Path(file).name,
+            font=("Arial", 11),
+            text_color=MUTED,
+            anchor="w"
+        ).pack(fill="x")
+
+        remove_button = ctk.CTkButton(
+            row,
+            text="✕",
+            width=32,
+            height=32,
+            corner_radius=7,
+            fg_color="#FEE2E2",
+            hover_color="#FECACA",
+            text_color="#DC2626",
+            font=("Arial", 16, "bold"),
+            command=lambda f=file: remove_file(f)
+        )
+        remove_button.pack(side="right", padx=(4, 8))
+
+        rename_button = ctk.CTkButton(
+            row,
+            text="✓" if editing_file == file else "✎",
+            width=32,
+            height=32,
+            corner_radius=7,
+            fg_color="#E8EFFD",
+            hover_color="#D7E5FF",
+            text_color=BLUE,
+            font=("Arial", 17),
+            command=rename_command
+        )
+        rename_button.pack(side="right", padx=4)
+
+
+def choose_files():
+    if converting:
+        return
+
+    files = filedialog.askopenfilenames(
+        title="Select HEIC Images",
+        filetypes=[
+            ("HEIC Images", "*.heic *.heif")
+        ]
+    )
+
+    for file in files:
+        if file not in selected_files:
+            selected_files.append(file)
+
+    update_files()
+
+
+def remove_file(file):
+    global editing_file
+    if converting:
+        return
+
+    if file in selected_files:
+        selected_files.remove(file)
+        
+    output_names.pop(file, None)
+    if editing_file == file:
+        editing_file = None
+    update_files()
+
+def save_rename(file, entry):
+    global editing_file
+
+    new_name = entry.get().strip()
+
+    if new_name.lower().endswith(".jpg"):
+        new_name = new_name[:-4]
+
+    invalid_characters = '<>:"/\\|?*'
+
+    reserved_names = {
+        "CON", "PRN", "AUX", "NUL",
+        *[f"COM{i}" for i in range(1, 10)],
+        *[f"LPT{i}" for i in range(1, 10)]
+    }
+
+    if (
+        not new_name
+        or any(char in new_name for char in invalid_characters)
+        or any(ord(char) < 32 for char in new_name)
+        or new_name.endswith((".", " "))
+        or new_name.upper().split(".")[0] in reserved_names
+    ):
+        messagebox.showwarning(
+            "Invalid Filename",
+            "Please enter a valid Windows filename."
+        )
+        return
+
+    output_names[file] = new_name
+    editing_file = None
+    update_files()
+
+def clear_files():
+    if converting:
+        return
+
+    selected_files.clear()
+    output_names.clear()
+    global editing_file
+    editing_file = None
+    update_files()
+
+
+
+def valid_filename(name):
+    invalid = '<>:"/\\|?*'
+    reserved = {'CON', 'PRN', 'AUX', 'NUL'} | {f'COM{i}' for i in range(1, 10)} | {f'LPT{i}' for i in range(1, 10)}
+    return bool(name) and not any(c in invalid or ord(c) < 32 for c in name) and not name.endswith(('.', ' ')) and name.upper().split('.')[0] not in reserved
+
+
+def filename_key(name):
+    return name.casefold()
+
+
+def available_name(base, used):
+    counter = 1
+    candidate = f'{base}_{counter}.jpg'
+    while filename_key(candidate) in used:
+        counter += 1
+        candidate = f'{base}_{counter}.jpg'
+    return candidate
+
+
+def begin_conversion(folder, jobs):
+    global converting
+    converting = True
+    browse_button.configure(state='disabled')
+    clear_button.configure(state='disabled')
+    update_files()
+    files_card.pack_forget()
+    progress_card.pack(fill='x', pady=(0, 15))
+    progress_bar.set(0)
+    progress_label.configure(text='Converting... 0%', text_color=TEXT)
+    counter_label.configure(text=f'0 / {len(jobs)} images')
+    Thread(target=conversion_worker, args=(jobs, folder), daemon=True).start()
+
+
+def start_conversion():
+    if converting or not selected_files:
+        return
+    if editing_file is not None:
+        messagebox.showinfo('Finish renaming', 'Click ✓ or press Enter to save the filename before converting.')
+        return
+
+    folder = filedialog.askdirectory(title='Choose where to save JPEG images')
+    if not folder:
+        return
+
+    destination = Path(folder)
+    # A single directory scan is faster than searching for each selected name.
+    existing = {}
+    try:
+        for entry in destination.iterdir():
+            existing[filename_key(entry.name)] = entry
+    except OSError as exc:
+        messagebox.showerror('Folder error', str(exc))
+        return
+
+    planned = []
+    for source in selected_files:
+        base = output_names.get(source, Path(source).stem)
+        if not valid_filename(base):
+            messagebox.showerror('Invalid filename', f'Please rename: {base}')
+            return
+        planned.append({'source': source, 'base': base, 'name': base + '.jpg', 'action': 'new'})
+
+    # Any output name shared by two selected images is a conflict too.
+    counts = defaultdict(int)
+    for item in planned:
+        counts[filename_key(item['name'])] += 1
+    conflicts = [i for i, item in enumerate(planned)
+                 if filename_key(item['name']) in existing or counts[filename_key(item['name'])] > 1]
+    if conflicts:
+        show_conflicts(folder, planned, existing, conflicts)
+    else:
+        begin_conversion(folder, [(x['source'], x['name'], 'new') for x in planned])
+
+
+def show_conflicts(folder, planned, existing, conflicts):
+    dialog = ctk.CTkToplevel(app)
+    dialog.title('Resolve filename conflicts')
+    dialog.geometry('740x560')
+    dialog.minsize(480, 370)
+    dialog.transient(app)
+    dialog.grab_set()
+    dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+
+    ctk.CTkLabel(dialog, text=f'{len(conflicts)} filename conflict(s) found',
+                 font=('Arial', 21, 'bold')).pack(pady=(18, 4))
+    ctk.CTkLabel(dialog, text='Rename, Replace or Skip. Existing files are never deleted automatically.',
+                 text_color=MUTED, wraplength=450).pack(pady=(0, 10))
+
+    choices = {}
+    rows = ctk.CTkScrollableFrame(dialog, fg_color='transparent')
+    rows.pack(fill='both', expand=True, padx=18, pady=8)
+
+    for index in conflicts:
+        item = planned[index]
+        line = ctk.CTkFrame(rows, fg_color='#F1F5F9', corner_radius=10)
+        line.pack(fill='x', pady=5)
+        ctk.CTkLabel(line, text=Path(item['source']).name,
+                     anchor='w', font=('Arial', 12, 'bold')).pack(fill='x', padx=12, pady=(8, 0))
+        ctk.CTkLabel(line, text='Output: ' + item['name'], text_color=MUTED,
+                     anchor='w').pack(fill='x', padx=12)
+        control = ctk.CTkFrame(line, fg_color='transparent')
+        control.pack(fill='x', padx=10, pady=8)
+        mode = ctk.StringVar(value='rename')
+        selector = ctk.CTkOptionMenu(control, values=['rename', 'replace', 'skip'], variable=mode, width=115)
+        selector.pack(side='left', padx=(0, 8))
+        entry = ctk.CTkEntry(control, placeholder_text='New JPEG filename (without .jpg)')
+        entry.pack(side='left', fill='x', expand=True)
+        choices[index] = (mode, entry)
+
+    def apply_to_all(action):
+        for mode, _ in choices.values():
+            mode.set(action)
+
+    all_buttons = ctk.CTkFrame(dialog, fg_color='transparent')
+    all_buttons.pack(fill='x', padx=18)
+    ctk.CTkLabel(all_buttons, text='Apply to all:', text_color=MUTED).pack(side='left', padx=(0, 8))
+    for label, action in [('Auto-rename', 'rename'), ('Replace', 'replace'), ('Skip', 'skip')]:
+        ctk.CTkButton(all_buttons, text=label, width=95, height=30,
+                      fg_color='#E2E8F0', hover_color='#CBD5E1', text_color=TEXT,
+                      command=lambda a=action: apply_to_all(a)).pack(side='left', padx=3)
+
+    def confirm():
+        # First reserve every unchanged output name. This avoids accidental
+        # collisions between auto-renamed and nonconflicting images.
+        used = {filename_key(x['name']) for i, x in enumerate(planned) if i not in conflicts}
+        used.update(existing.keys())
+        jobs = []
+        for i, item in enumerate(planned):
+            if i not in conflicts:
+                jobs.append((item['source'], item['name'], 'new'))
+                continue
+            mode, entry = choices[i]
+            action = mode.get()
+            if action == 'skip':
+                jobs.append((item['source'], item['name'], 'skip'))
+                continue
+            if action == 'replace':
+                key = filename_key(item['name'])
+                target = existing.get(key)
+                if target is None or not target.is_file():
+                    messagebox.showwarning('Cannot replace',
+                        f'{item["name"]} is not an existing regular file. Choose Rename or Skip.', parent=dialog)
+                    return
+                # Multiple replacements of the same file in one batch are unsafe.
+                if sum(1 for j in jobs if j[2] == 'replace' and filename_key(j[1]) == key):
+                    messagebox.showwarning('Duplicate replacement',
+                        f'Multiple images would replace {item["name"]}. Rename one instead.', parent=dialog)
+                    return
+                jobs.append((item['source'], target.name, 'replace'))
+                continue
+            base = entry.get().strip()
+            if base.lower().endswith('.jpg'):
+                base = base[:-4]
+            if not base:
+                base = item['base']
+                name = available_name(base, used)
+            else:
+                if not valid_filename(base):
+                    messagebox.showwarning('Invalid name', f'Invalid filename: {base}', parent=dialog)
+                    return
+                name = base + '.jpg'
+                if filename_key(name) in used:
+                    messagebox.showwarning('Name already used',
+                        f'{name} already exists or is planned. Choose a different name.', parent=dialog)
+                    return
+            used.add(filename_key(name))
+            jobs.append((item['source'], name, 'new'))
+
+        if any(action == 'replace' for _, _, action in jobs):
+            if not messagebox.askyesno('Confirm replacement',
+                'Replace the selected existing JPEG files? This cannot be undone.', parent=dialog):
+                return
+        dialog.grab_release()
+        dialog.destroy()
+        begin_conversion(folder, jobs)
+
+    footer = ctk.CTkFrame(dialog, fg_color='transparent')
+    footer.pack(fill='x', padx=18, pady=14)
+    ctk.CTkButton(footer, text='Cancel', fg_color='#E2E8F0', text_color=TEXT,
+                  hover_color='#CBD5E1', command=dialog.destroy).pack(side='left')
+    ctk.CTkButton(footer, text='Continue Conversion', fg_color=BLUE,
+                  command=confirm).pack(side='right')
+
+
+def conversion_worker(jobs, folder):
+    try:
+        def report_progress(current, total):
+            events.put(('progress', current, total))
+        converted, failed, skipped = convert_heic_to_jpg(jobs, folder, progress_callback=report_progress)
+        events.put(('done', converted, failed, skipped))
+    except Exception as error:
+        events.put(('error', str(error)))
+
+
+def check_events():
+    try:
+        while True:
+            event = events.get_nowait()
+
+            if event[0] == "progress":
+                _, current, total = event
+
+                percentage = current / total if total else 0
+
+                progress_bar.set(percentage)
+
+                progress_label.configure(
+                    text=f"Converting... {percentage:.0%}"
+                )
+
+                counter_label.configure(
+                    text=f"{current} / {total} images"
+                )
+
+            elif event[0] == "done":
+                _, converted, failed, skipped = event
+
+                progress_bar.set(1)
+
+                if failed == 0:
+                    progress_label.configure(
+                        text=f"Done 👍  {converted} converted, {skipped} skipped",
+                        text_color="#15803D"
+                    )
+                else:
+                    progress_label.configure(
+                        text=f"Finished: {converted} converted, {skipped} skipped, "
+                             f"{failed} failed",
+                        text_color="#B45309"
+                    )
+
+                
+                if failed == 0:
+                    app.after(2000, reset_screen)
+                else:
+                    app.after(2000, reset_after_failure)
+
+            elif event[0] == "error":
+                progress_label.configure(
+                    text="Conversion failed: " + event[1],
+                    text_color="#DC2626"
+                )
+                app.after(2000, reset_after_failure)
+
+    except Empty:
+        pass
+
+    app.after(100, check_events)
+
+
+def reset_after_failure():
+    global converting
+    converting = False
+    progress_card.pack_forget()
+    files_card.pack(fill="x", pady=(0, 25))
+    browse_button.configure(state="normal")
+    clear_button.configure(state="normal")
+    update_files()
+
+
+def reset_screen():
+    global converting, editing_file
+
+    converting = False
+    editing_file = None
+
+    # Clear previous conversion files
+    selected_files.clear()
+    output_names.clear()
+
+    progress_card.pack_forget()
+
+    # Restore the selected-images panel
+    files_card.pack(
+        fill="x",
+        pady=(0, 25)
+    )
+
+    browse_button.configure(state="normal")
+    clear_button.configure(state="normal")
+
+    update_files()
+
+
+
+
+# Reserve the convert button area first so it is never squeezed by the main content.
+bottom_frame = ctk.CTkFrame(app, fg_color="transparent")
+bottom_frame.pack(side="bottom", fill="x", padx=15, pady=(4, 8))
+
+# The rest scrolls when the window becomes short or narrow.
+main = ctk.CTkScrollableFrame(app, fg_color="transparent", corner_radius=0)
+main.pack(side="top", fill="both", expand=True, padx=15, pady=(6, 2))
+
+title_label = ctk.CTkLabel(
+    main,
+    text="HEIC To JPEG",
+    font=("Arial", 38, "bold"),
+    text_color="#000000"
+).pack(pady=(0, 10))
+
+ctk.CTkLabel(
+    main,
+    text="Convert your images quickly, privately, and in high quality",
+    font=("Arial", 16, "bold"),
+    text_color=TEXT
+).pack(pady=(0, 25))
+
+
+upload_card = ctk.CTkFrame(
+    main,
+    fg_color=WHITE,
+    border_width=1,
+    border_color=BORDER,
+    corner_radius=16
+)
+upload_card.pack(fill="x", pady=(0, 25))
+
+ctk.CTkLabel(
+    upload_card,
+    text="↑",
+    font=("Arial", 32),
+    text_color=BLUE
+).pack(pady=(10, 0))
+
+ctk.CTkLabel(
+    upload_card,
+    text="Add your HEIC images",
+    font=("Arial", 19, "bold"),
+    text_color=TEXT
+).pack()
+
+ctk.CTkLabel(
+    upload_card,
+    text="Select one or multiple HEIC / HEIF images",
+    font=("Arial", 12),
+    text_color=MUTED
+).pack(pady=5)
+
+browse_button = ctk.CTkButton(
+    upload_card,
+    text="+ Browse Files",
+    width=180,
+    height=42,
+    fg_color=BLUE,
+    hover_color=BLUE_HOVER,
+    command=choose_files
+)
+browse_button.pack(pady=(10, 15))
+
+
+
+files_card = ctk.CTkFrame(
+    main,
+    fg_color=WHITE,
+    border_width=1,
+    border_color=BORDER,
+    corner_radius=16
+)
+files_card.pack(fill="x", pady=(0, 25))
+
+files_header = ctk.CTkFrame(
+    files_card,
+    fg_color="transparent"
+)
+files_header.pack(fill="x", padx=20, pady=(12, 5))
+
+ctk.CTkLabel(
+    files_header,
+    text="Selected Images",
+    font=("Arial", 15, "bold"),
+    text_color=TEXT
+).pack(side="left")
+
+clear_button = ctk.CTkButton(
+    files_header,
+    text="Clear All",
+    width=80,
+    height=28,
+    fg_color="#F1F5F9",
+    text_color=TEXT,
+    hover_color="#E2E8F0",
+    command=clear_files
+)
+clear_button.pack(side="right")
+
+count_label = ctk.CTkLabel(
+    files_card,
+    text="0 files selected",
+    text_color=MUTED,
+    font=("Arial", 11)
+)
+count_label.pack(anchor="w", padx=20)
+
+file_container = ctk.CTkScrollableFrame(
+    files_card,
+    fg_color="transparent",
+    height=140
+)
+file_container.pack(
+    fill="both",
+    expand=True,
+    padx=12,
+    pady=(5, 12)
+)
+
+
+
+progress_card = ctk.CTkFrame(
+    main,
+    fg_color=WHITE,
+    border_width=1,
+    border_color=BORDER,
+    corner_radius=16
+)
+
+progress_label = ctk.CTkLabel(
+    progress_card,
+    text="Converting... 0%",
+    font=("Arial", 20, "bold"),
+    text_color=TEXT
+)
+progress_label.pack(pady=(25, 10))
+
+progress_bar = ctk.CTkProgressBar(
+    progress_card,
+    height=12,
+    progress_color=BLUE
+)
+progress_bar.pack(
+    fill="x",
+    padx=30,
+    pady=10
+)
+progress_bar.set(0)
+
+counter_label = ctk.CTkLabel(
+    progress_card,
+    text="0 / 0 images",
+    text_color=MUTED
+)
+counter_label.pack(pady=(0, 25))
+
+
+
+convert_button = ctk.CTkButton(
+    bottom_frame,
+    text="Convert to JPEG",
+    height=65,
+    font=("Arial", 22, "bold"),
+    fg_color=BLUE,
+    hover_color=BLUE_HOVER,
+    corner_radius=12,
+    command=start_conversion
+)
+convert_button.pack(fill="x", padx=5, pady=3)
+
+update_files()
+
+app.after(100, check_events)
+
+def on_resize(event):
+    if event.widget != app:
+        return
+    width = app.winfo_width()
+    title_label.configure(font=("Arial", 26 if width < 650 else 38, "bold"))
+
+app.bind("<Configure>", on_resize)
+
+app.mainloop()
