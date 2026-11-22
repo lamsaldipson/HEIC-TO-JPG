@@ -1,2 +1,2 @@
-/build/HEIC-to-JPEG/*.html linguist-generated
-/build/HEIC-to-JPEG/*.toc linguist-generated
+build/HEIC-to-JPEG/*.html linguist-generated -linguist-detectable
+build/HEIC-to-JPEG/*.toc linguist-generated -linguist-detectable
