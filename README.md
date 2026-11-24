@@ -2,6 +2,12 @@
 hey! this is text explaining what my awesome project is :) 
 here's an AWESOME gif of my project!
 
+
+
+https://github.com/user-attachments/assets/ea7301cf-21b0-4865-a327-186eff3f609d
+
+
+
 ## HOW THIS WAS MADE
 
 this project was made with using python only. I was learning python as i made this for me to check what i have learn 
